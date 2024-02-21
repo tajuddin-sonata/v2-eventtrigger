@@ -23,7 +23,7 @@ def main(event: func.EventGridEvent):
 
     if 'landing' in event.subject.lower():
 
-        logic_app_url = "$LOGICAPP_URL"
+        logic_app_url = "$LOGICAPP_CALLBACK_URL"
 
         response = requests.post(logic_app_url, json=parsed_json)
 
