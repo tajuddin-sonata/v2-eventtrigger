@@ -13,7 +13,8 @@ pipeline {
         string(name: 'VERSION', description: 'Explicit version to deploy (i.e., "v0.1-51-g87b72a"). Leave blank to build latest commit')
         
 
-        string(name: 'AZURE_FUNCTION_NAME', defaultValue:'dev-wf-configure', description: '''The name of FunctionApp to deploy
+        string(name: 'AZURE_FUNCTION_NAME', defaultValue:'dev-jenkins-eventtrigger', description: '''The name of FunctionApp to deploy
+            dev-jenkins-eventtrigger
             dev-wf-configure 
             stg-wf-configure
             prod-wf-configure''' )
@@ -29,7 +30,7 @@ pipeline {
             eastus''')
 
 
-        string(name: 'SUBSCRIPTION', defaultValue:'34b1c36e-d8e8-4bd5-a6f3-2f92a1c0626e', description: ''' select subscription as:
+        string(name: 'SUBSCRIPTION', defaultValue:'48986b2e-5349-4fab-a6e8-d5f02072a4b8', description: ''' select subscription as:
             48986b2e-5349-4fab-a6e8-d5f02072a4b8
             34b1c36e-d8e8-4bd5-a6f3-2f92a1c0626e
             70c3af66-8434-419b-b808-0b3c0c4b1a04''')
@@ -39,7 +40,7 @@ pipeline {
             jenkins-247-rg
             ''')
 
-        string(name: 'WORKFLOW_NAME', defaultValue:'CI-Workflow1', description: ''' LogicApp Workflow name.
+        string(name: 'WORKFLOW_NAME', defaultValue:'dev-workflow1', description: ''' LogicApp Workflow name.
             CI-Workflow1
             ''')
 
@@ -56,8 +57,7 @@ pipeline {
         ZIP_FILE_NAME = "${params.AZURE_LOGICAPP_NAME}"
         SONARQUBE_SCANNER_HOME = tool 'sonarscanner-5'
         logicAppResourceId="/subscriptions/${params.SUBSCRIPTION}/resourceGroups/${params.RESOURCE_GROUP_NAME}/providers/Microsoft.Web/sites/${params.AZURE_LOGICAPP_NAME}"
-        CONFIGURE_FUNC_MASTER_KEY = ''
-    
+        callbackUrl = ''
     }
 
     stages {
@@ -114,13 +114,17 @@ pipeline {
         stage('rewrite the code') {
             steps {
                 script {
-                    // Set CONFIGURE_FUNC_MASTER_KEY in global scope
-                    LOGICAPP_URL = sh(script: "az rest --method post --uri https://management.azure.com/subscriptions/${params.SUBSCRIPTION}/resourceGroups/${params.RESOURCE_GROUP_NAME}/providers/Microsoft.Web/sites/${params.AZURE_LOGICAPP_NAME}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${params.WORKFLOW_NAME}/triggers/${params.WORKFLOW_TRIGGER_NAME}listCallbackUrl?api-version=2018-11-01 | grep -o '"value": *"[^"]*"' | awk -F'"' '{print $4}'", returnStdout: true).trim()
-                    sh """
-                    cd src/
-                    sed -i 's|\$LOGICAPP_URL|${LOGICAPP_URL}|g' function_app.py
-                    cd $WORKSPACE
-                    """
+                    callbackUrl = sh(script: "az rest --method post --uri 'https://management.azure.com/subscriptions/${params.SUBSCRIPTION}/resourceGroups/${params.RESOURCE_GROUP_NAME}/providers/Microsoft.Web/sites/${params.AZURE_LOGICAPP_NAME}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${params.WORKFLOW_NAME}/triggers/${params.WORKFLOW_TRIGGER_NAME}/listCallbackUrl?api-version=2018-11-01' | grep -o '\"value\": *\"[^\"]*\"' | awk -F'\"' '{print \$4}'", returnStdout: true).trim()
+                    echo "${callbackUrl}"
+                    
+                    // Read the content of function_app.py
+                    def file = readFile('src/function_app.py')
+                    
+                    // Replace the placeholder with the callback URL
+                    def updatedFile = file.replace('$LOGICAPP_CALLBACK_URL', callbackUrl)
+                    
+                    // Write the updated content back to the file
+                    writeFile(file: 'src/function_app.py', text: updatedFile)
                 }
             }
         }
@@ -177,6 +181,9 @@ pipeline {
         stage('Deploy artifacts to Nexus & Azure') {
             steps {
                 script {
+                    sh 'az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID'
+                    sh "az account set --subscription ${params.SUBSCRIPTION}"
+
                     echo "Deploy artifact to Nexus & Azure !!!"
                     def ver = params.VERSION
                     sh """
@@ -202,6 +209,7 @@ pipeline {
 
                         ls -ltr
                         cd $ZIP_FILE_NAME-\${artifact_version}
+                        ls -ltr
                         func azure functionapp publish ${params.AZURE_FUNCTION_NAME} --python
                     """
                 }
